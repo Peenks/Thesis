@@ -2,9 +2,10 @@
 venv/
 .venv/
 
-# Ignore datasets
+# Ignore dataset files
 data/raw/
 data/processed/
+*.zip
 
 # Ignore Python cache
 __pycache__/
