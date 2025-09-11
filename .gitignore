@@ -1,0 +1,18 @@
+# Ignore venv
+venv/
+.venv/
+
+# Ignore datasets
+data/raw/
+data/processed/
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Ignore Jupyter checkpoints
+.ipynb_checkpoints/
+
+# macOS files
+.DS_Store
