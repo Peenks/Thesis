@@ -21,11 +21,11 @@ possible_folders = [
 
 for folder in possible_folders:
     if folder.exists():
-        print(f"📂 Found {folder.name}")
+        print(f"Found {folder.name}")
         for item in folder.iterdir():
             dest = raw_dir / item.name
             if dest.exists():
-                print(f"⚠️ Skipping {item.name} (already exists)")
+                print(f"Skipping {item.name} (already exists)")
                 continue
             shutil.move(str(item), raw_dir)
         shutil.rmtree(folder, ignore_errors=True)
@@ -49,5 +49,5 @@ for img in raw_dir.glob("*.jpg"):
         shutil.move(str(img), dest / img.name)
 
 found_classes = [d.name for d in raw_dir.iterdir() if d.is_dir()]
-print("\n✅ Dataset organized under data/raw/")
+print("\nDataset organized under data/raw/")
 print("Found categories:", found_classes)
