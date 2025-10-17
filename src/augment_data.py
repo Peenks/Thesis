@@ -76,7 +76,7 @@ def augment_dataset(input_dir=RAW_DIR, output_dir=AUG_DIR, n_aug=AUG_PER_IMAGE):
         output_cls = os.path.join(output_dir, cls)
         os.makedirs(output_cls, exist_ok=True)
 
-        print(f"🔄 Augmenting class: {cls}")
+        print(f"Augmenting class: {cls}")
 
         for img_name in os.listdir(input_cls):
             if not img_name.lower().endswith((".jpg", ".jpeg", ".png")):
@@ -101,7 +101,7 @@ def augment_dataset(input_dir=RAW_DIR, output_dir=AUG_DIR, n_aug=AUG_PER_IMAGE):
 
         print(f"Finished augmenting {cls}")
 
-    print("\n🎉 Augmentation complete! All results saved to:", output_dir)
+    print("\nAugmentation complete! All results saved to:", output_dir)
 
 # ========== RUN ==========
 if __name__ == "__main__":
