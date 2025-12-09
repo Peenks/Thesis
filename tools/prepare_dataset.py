@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+# -- coding: utf-8 --
 
 import os, json, shutil, random, argparse
 from pathlib import Path
@@ -114,7 +114,18 @@ def main():
     if abs(sum(split.values()) - 1.0) > 1e-6:
         raise SystemExit("Splits must sum to 1.0")
 
-    expected = {"cardboard", "glass", "metal", "paper", "plastic", "trash"}
+    expected = {
+    "battery",
+    "biological",
+    "cardboard",
+    "clothes",
+    "glass",
+    "metal",
+    "paper",
+    "plastic",
+    "shoes",
+    "trash",
+}
     src_dir = Path(args.src) if args.src else find_src_dir(raw_dir, expected)
 
     print("Source:", src_dir)
