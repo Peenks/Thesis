@@ -1,0 +1,41 @@
+# Ignore virtual environments
+venv/
+.venv/
+
+# Ignore ALL dataset files
+data/
+
+# Ignore trained models
+models/
+
+# Ignore archives
+*.zip
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Ignore Jupyter checkpoints
+.ipynb_checkpoints/
+
+# macOS files
+.DS_Store# Ignore venv
+venv/
+.venv/
+
+# Ignore dataset files
+data/raw/
+data/processed/
+*.zip
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Ignore Jupyter checkpoints
+.ipynb_checkpoints/
+
+# macOS files
+.DS_Store
