@@ -122,6 +122,7 @@ class FineTunedTrashClassifier(nn.Module):
 
     def forward(self, x):
         features = self.encoder(x)
+        features = torch.nn.functional.normalize(features, dim=1)
         logits = self.classifier(features)
         return logits
 
