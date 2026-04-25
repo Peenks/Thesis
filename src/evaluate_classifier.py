@@ -1,9 +1,8 @@
 import os
-import json
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from torchvision import datasets, transforms
+from torchvision import datasets, transforms, models
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
 
 
@@ -41,11 +40,9 @@ def get_transform():
 
 
 # =====================
-# ENCODER BUILDER (IMPORTANT FIX)
+# ENCODER
 # =====================
 def build_encoder():
-    from torchvision import models
-
     model = models.mobilenet_v2(weights=None)
 
     encoder = nn.Sequential(
@@ -61,7 +58,7 @@ def build_encoder():
 
 
 # =====================
-# MODEL
+# CLASSIFIER (MLP HEAD)
 # =====================
 class Classifier(nn.Module):
     def __init__(self, encoder, num_classes):
@@ -86,11 +83,35 @@ class Classifier(nn.Module):
 
 
 # =====================
+# LOAD CHECKPOINT SAFELY
+# =====================
+def load_encoder(encoder, device):
+    checkpoint = torch.load(ENCODER_PATH, map_location=device)
+
+    # 🔥 FIX: handle both raw state_dict OR dict checkpoint
+    if isinstance(checkpoint, dict) and "encoder" in checkpoint:
+        encoder.load_state_dict(checkpoint["encoder"])
+    else:
+        encoder.load_state_dict(checkpoint)
+
+    return encoder
+
+
+def load_classifier(model, device):
+    checkpoint = torch.load(CLASSIFIER_PATH, map_location=device)
+
+    # assume full state_dict
+    model.load_state_dict(checkpoint)
+
+    return model
+
+
+# =====================
 # MAIN
 # =====================
 def main():
     device = get_device()
-    print("Device:", device)
+    print("Using device:", device)
 
     test_dataset = datasets.ImageFolder(
         os.path.join(DATA_SPLIT_DIR, "test"),
@@ -101,15 +122,23 @@ def main():
 
     num_classes = len(test_dataset.classes)
 
+    # =====================
+    # BUILD MODEL
+    # =====================
     encoder = build_encoder()
-    encoder.load_state_dict(torch.load(ENCODER_PATH, map_location=device), strict=True)
-    encoder.to(device)
+    encoder = load_encoder(encoder, device)
 
-    model = Classifier(encoder, num_classes).to(device)
-    model.load_state_dict(torch.load(CLASSIFIER_PATH, map_location=device))
+    model = Classifier(encoder, num_classes)
+
+    model = load_classifier(model, device)
+    model = model.to(device)
     model.eval()
 
-    preds_all, labels_all = [], []
+    # =====================
+    # EVALUATION
+    # =====================
+    preds_all = []
+    labels_all = []
 
     with torch.no_grad():
         for xb, yb in test_loader:
@@ -124,7 +153,8 @@ def main():
     y_pred = torch.cat(preds_all).numpy()
     y_true = torch.cat(labels_all).numpy()
 
-    print("\nAccuracy:", accuracy_score(y_true, y_pred))
+    print("\n=== RESULTS ===")
+    print("Accuracy:", accuracy_score(y_true, y_pred))
     print("Macro F1:", f1_score(y_true, y_pred, average="macro"))
 
     print("\nClassification Report:")

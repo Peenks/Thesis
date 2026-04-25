@@ -1,5 +1,4 @@
 import os
-import json
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
@@ -30,13 +29,16 @@ def get_device():
 
 
 # =====================
-# LOAD EMBEDDINGS
+# LOAD EMBEDDINGS (THIS IS YOUR "TENSOR RESULTS")
 # =====================
 def load_split(split_name):
     path = os.path.join(EMBEDDINGS_DIR, f"{split_name}_embeddings.pt")
     data = torch.load(path, map_location="cpu")
 
-    return data["embeddings"].float(), data["labels"].long()
+    embeddings = data["embeddings"].float()   # <-- TENSOR FEATURES (from SimCLR)
+    labels = data["labels"].long()            # <-- TENSOR LABELS
+
+    return embeddings, labels
 
 
 # =====================
@@ -68,10 +70,11 @@ class LightweightMLP(nn.Module):
 # =====================
 # EVALUATION
 # =====================
-def evaluate(model, loader, device, target_names=None):
+def evaluate(model, loader, device):
     model.eval()
 
-    preds_all, labels_all = [], []
+    preds_all = []
+    labels_all = []
     correct, total = 0, 0
 
     with torch.no_grad():
@@ -93,12 +96,7 @@ def evaluate(model, loader, device, target_names=None):
     acc = correct / total
     macro_f1 = f1_score(y_true, y_pred, average="macro", zero_division=0)
 
-    report = classification_report(
-        y_true,
-        y_pred,
-        target_names=target_names,
-        zero_division=0
-    )
+    report = classification_report(y_true, y_pred, zero_division=0)
 
     return acc, macro_f1, report
 
@@ -108,13 +106,18 @@ def evaluate(model, loader, device, target_names=None):
 # =====================
 def train():
     device = get_device()
-    print("Device:", device)
+    print("Using device:", device)
 
+    # =====================
+    # LOAD SIMCLR EMBEDDINGS (THIS IS THE KEY STEP)
+    # =====================
     X_train, y_train = load_split("train")
     X_val, y_val = load_split("val")
 
+    X_train, X_val = X_train.float(), X_val.float()
+
     input_dim = X_train.shape[1]
-    num_classes = len(torch.unique(y_train))
+    num_classes = int(y_train.max().item() + 1)
 
     train_loader = DataLoader(TensorDataset(X_train, y_train), batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(TensorDataset(X_val, y_val), batch_size=BATCH_SIZE, shuffle=False)
@@ -139,8 +142,8 @@ def train():
 
             optimizer.zero_grad()
             logits = model(xb)
-            loss = criterion(logits, yb)
 
+            loss = criterion(logits, yb)
             loss.backward()
             optimizer.step()
 

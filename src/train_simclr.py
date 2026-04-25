@@ -9,15 +9,25 @@ from torch.utils.data import DataLoader
 
 
 # ===========================
-# SEED + DEVICE
+# SEED + DEVICE (MPS FIXED)
 # ===========================
 seed = 42
 random.seed(seed)
 np.random.seed(seed)
 torch.manual_seed(seed)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# 🔥 FIXED DEVICE SELECTION FOR MAC MPS
+if torch.backends.mps.is_available():
+    device = torch.device("mps")
+elif torch.cuda.is_available():
+    device = torch.device("cuda")
+else:
+    device = torch.device("cpu")
+
 print("Using device:", device)
+
+# 🔥 helps prevent crashes on unsupported ops
+os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
 
 # ===========================
@@ -27,7 +37,7 @@ IMAGE_SIZE = 224
 BATCH_SIZE = 16
 EPOCHS = 10
 EMBED_DIM = 128
-TEMPERATURE = 0.2   # 🔥 improved (important for better separation)
+TEMPERATURE = 0.2
 
 DATA_DIR = "data/raw/original"
 
@@ -37,13 +47,11 @@ os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
 
 # ===========================
-# SIMCLR AUGMENTATION (IMPROVED)
+# SIMCLR AUGMENTATION
 # ===========================
 class SimCLRTransform:
     def __init__(self, size=224):
-
         self.transform = transforms.Compose([
-            # 🔥 stronger SimCLR crop (key improvement)
             transforms.RandomResizedCrop(
                 size,
                 scale=(0.2, 1.0),
@@ -52,7 +60,6 @@ class SimCLRTransform:
 
             transforms.RandomHorizontalFlip(p=0.5),
 
-            # 🔥 stronger + more stable color jitter
             transforms.RandomApply([
                 transforms.ColorJitter(
                     brightness=0.8,
@@ -64,14 +71,11 @@ class SimCLRTransform:
 
             transforms.RandomGrayscale(p=0.2),
 
-            # 🔥 stronger blur (SimCLR standard improvement)
             transforms.RandomApply([
                 transforms.GaussianBlur(kernel_size=23)
             ], p=0.5),
 
             transforms.ToTensor(),
-
-            # 🔥 normalization improves convergence stability
             transforms.Normalize([0.5]*3, [0.5]*3)
         ])
 
@@ -83,7 +87,7 @@ simclr_transform = SimCLRTransform(IMAGE_SIZE)
 
 
 # ===========================
-# DATASET (SIMCLR STYLE)
+# DATASET
 # ===========================
 class SimCLRDataset(torch.utils.data.Dataset):
     def __init__(self, root, transform):
@@ -95,28 +99,21 @@ class SimCLRDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         img, _ = self.dataset[idx]
-
-        # 🔥 two independent views = core SimCLR idea
         return self.transform(img), self.transform(img)
 
 
 # ===========================
-# IMPROVED MOBILENETV2 ENCODER
+# MOBILENETV2 ENCODER
 # ===========================
 def get_mobilenetv2_encoder():
     model = models.mobilenet_v2(weights=None)
-
     backbone = model.features
 
-    # 🔥 KEY IMPROVEMENT:
-    # 1x1 conv refines channel interactions BEFORE pooling
     encoder = nn.Sequential(
         backbone,
-
         nn.Conv2d(1280, 1280, kernel_size=1),
         nn.BatchNorm2d(1280),
         nn.ReLU(inplace=True),
-
         nn.AdaptiveAvgPool2d(1),
         nn.Flatten(),
     )
@@ -125,7 +122,7 @@ def get_mobilenetv2_encoder():
 
 
 # ===========================
-# PROJECTION HEAD (IMPROVED)
+# PROJECTION HEAD
 # ===========================
 class ProjectionHead(nn.Module):
     def __init__(self, input_dim, embed_dim=128):
@@ -148,7 +145,7 @@ class ProjectionHead(nn.Module):
 
 
 # ===========================
-# NT-XENT LOSS (STABLE VERSION)
+# NT-XENT LOSS
 # ===========================
 def nt_xent_loss(z1, z2, temperature):
     batch_size = z1.size(0)
@@ -176,12 +173,15 @@ def train_simclr():
 
     train_dataset = SimCLRDataset(DATA_DIR, simclr_transform)
 
+    # 🔥 MPS FIX: pin_memory only for CUDA
+    pin_memory = (device.type == "cuda")
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=BATCH_SIZE,
         shuffle=True,
         num_workers=2,
-        pin_memory=True   # 🔥 speed improvement
+        pin_memory=pin_memory
     )
 
     encoder, feat_dim = get_mobilenetv2_encoder()
