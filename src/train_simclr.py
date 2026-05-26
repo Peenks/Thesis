@@ -1,6 +1,4 @@
 import os
-import math
-import glob
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,43 +6,42 @@ from torchvision import datasets, transforms, models
 from torch.utils.data import DataLoader
 
 
-# ===========================
-# CONFIG
-# ===========================
 IMAGE_SIZE = 224
-BATCH_SIZE = 16
-EPOCHS = 10              # <--- STOP AT EPOCH 10
+BATCH_SIZE = 32
+EPOCHS = 20
 EMBED_DIM = 128
-TEMPERATURE = 0.5
+TEMPERATURE = 0.2
 
 DATA_DIR = "data/augmented"
 SAVE_PATH = "models/simclr_encoder.pth"
-CHECKPOINT_DIR = "models/checkpoints"
+CHECKPOINT_PATH = "models/checkpoints/last.pth"
+OLD_CKPT_PATH = "models/checkpoints/epoch_2.pth"
 
-os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+SAVE_EVERY = 200
+
+os.makedirs("models/checkpoints", exist_ok=True)
 
 device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+print("RUNNING FIXED SIMCLR VERSION")
 print("Using device:", device)
 
 
-# ===========================
-# DATA TRANSFORMS FOR SIMCLR
-# ===========================
 simclr_transform = transforms.Compose([
-    transforms.RandomResizedCrop(IMAGE_SIZE),
-    transforms.RandomHorizontalFlip(),
-    transforms.ColorJitter(0.8, 0.8, 0.8, 0.2),
+    transforms.RandomResizedCrop(IMAGE_SIZE, scale=(0.7, 1.0)),
+    transforms.RandomHorizontalFlip(p=0.5),
+    transforms.ColorJitter(0.3, 0.3, 0.3, 0.05),
     transforms.RandomGrayscale(p=0.2),
     transforms.ToTensor(),
+    transforms.Normalize(
+        [0.485, 0.456, 0.406],
+        [0.229, 0.224, 0.225]
+    )
 ])
 
 
-# ===========================
-# 1. SimCLR Dataset Wrapper
-# ===========================
 class SimCLRDataset(torch.utils.data.Dataset):
     def __init__(self, root, transform):
-        self.dataset = datasets.ImageFolder(root, transform=None)
+        self.dataset = datasets.ImageFolder(root)
         self.transform = transform
 
     def __len__(self):
@@ -57,72 +54,70 @@ class SimCLRDataset(torch.utils.data.Dataset):
         return x1, x2
 
 
-# ===========================
-# 2. MobileNetV2-inspired Encoder
-# ===========================
-def get_mobilenetv2_encoder():
+def get_encoder():
     model = models.mobilenet_v2(weights=None)
     encoder = nn.Sequential(
         model.features,
         nn.AdaptiveAvgPool2d(1),
-        nn.Flatten(),
+        nn.Flatten()
     )
     return encoder, 1280
 
 
-# ===========================
-# 3. Projection Head
-# ===========================
 class ProjectionHead(nn.Module):
-    def __init__(self, input_dim, embed_dim=128):
+    def __init__(self, in_dim, out_dim=128):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(input_dim, input_dim),
+            nn.Linear(in_dim, in_dim),
+            nn.BatchNorm1d(in_dim),
             nn.ReLU(),
-            nn.Linear(input_dim, embed_dim)
+            nn.Linear(in_dim, out_dim)
         )
 
     def forward(self, x):
         return self.net(x)
 
 
-# ===========================
-# 4. NT-Xent Loss
-# ===========================
 def nt_xent_loss(z1, z2, temperature):
-    batch_size = z1.size(0)
+    n = z1.size(0)
 
-    z1 = F.normalize(z1, dim=1)
-    z2 = F.normalize(z2, dim=1)
+    z = torch.cat([z1, z2], dim=0)
+    z = F.normalize(z, dim=1)
 
-    reps = torch.cat([z1, z2], dim=0)
-    similarity = torch.matmul(reps, reps.T)
+    sim = torch.matmul(z, z.T)
 
-    mask = torch.eye(batch_size * 2, device=similarity.device).bool()
-    similarity = similarity[~mask].view(batch_size * 2, -1)
+    mask = torch.eye(2 * n, dtype=torch.bool, device=z.device)
+    sim = sim.masked_fill(mask, -9e15)
 
-    positives = torch.sum(z1 * z2, dim=-1)
-    positives = torch.cat([positives, positives], dim=0)
+    sim = sim / temperature
 
-    logits = similarity / temperature
-    labels = torch.zeros(batch_size * 2, dtype=torch.long, device=logits.device)
+    labels = torch.arange(n, device=z.device)
+    labels = torch.cat([labels + n, labels])
 
-    loss = F.cross_entropy(logits, labels)
-    return loss
+    return F.cross_entropy(sim, labels)
 
 
-# ===========================
-# TRAINING LOOP
-# ===========================
 def train_simclr():
+    print("Preparing dataset...")
 
-    # dataset
-    train_dataset = SimCLRDataset(DATA_DIR, simclr_transform)
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
+    dataset = SimCLRDataset(DATA_DIR, simclr_transform)
+    print(f"Total images: {len(dataset)}")
 
-    # encoder + projector
-    encoder, feat_dim = get_mobilenetv2_encoder()
-    projector = ProjectionHead(feat_dim, EMBED_DIM)
+    print("Testing first image load...")
+    test_x1, test_x2 = dataset[0]
+    print("First image loaded:", test_x1.shape, test_x2.shape)
+
+    loader = DataLoader(
+        dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        num_workers=0
+    )
+
+    print(f"Total batches per epoch: {len(loader)}")
+
+    encoder, dim = get_encoder()
+    projector = ProjectionHead(dim, EMBED_DIM)
 
     encoder = encoder.to(device)
     projector = projector.to(device)
@@ -132,39 +127,53 @@ def train_simclr():
         lr=3e-4
     )
 
-    # -------------------------
-    # Resume From Checkpoint
-    # -------------------------
-    checkpoint_files = sorted(glob.glob(f"{CHECKPOINT_DIR}/epoch_*.pth"))
-
     start_epoch = 0
-    if checkpoint_files:
-        latest_ckpt = checkpoint_files[-1]
-        print(f"Loading checkpoint: {latest_ckpt}")
+    start_step = 0
 
-        ckpt = torch.load(latest_ckpt, map_location=device)
+    if os.path.exists(CHECKPOINT_PATH):
+        print(f"Resuming from checkpoint: {CHECKPOINT_PATH}")
+        ckpt = torch.load(CHECKPOINT_PATH, map_location=device)
+
         encoder.load_state_dict(ckpt["encoder"])
         projector.load_state_dict(ckpt["projector"])
         optimizer.load_state_dict(ckpt["optimizer"])
+
         start_epoch = ckpt["epoch"]
+        start_step = ckpt["step"]
 
-        print(f"Resuming from epoch {start_epoch}")
+        print(f"Resumed at epoch {start_epoch}, step {start_step}")
 
-    print("Starting SimCLR training...")
-    print(f"Total images: {len(train_dataset)}")
+    elif os.path.exists(OLD_CKPT_PATH):
+        print(f"Loading old encoder weights from: {OLD_CKPT_PATH}")
+        ckpt = torch.load(OLD_CKPT_PATH, map_location=device)
 
-    # --------------------
-    # TRAIN LOOP
-    # --------------------
+        encoder.load_state_dict(ckpt["encoder"], strict=False)
+        print("Old encoder weights loaded. Projector and optimizer start fresh.")
+
+    else:
+        print("No checkpoint found. Training from scratch.")
+
+    print("Starting training...")
+
     for epoch in range(start_epoch, EPOCHS):
-
         encoder.train()
         projector.train()
-        total_loss = 0
 
-        for idx, (x1, x2) in enumerate(train_loader):
+        total_loss = 0.0
+        trained_steps = 0
+
+        for step, (x1, x2) in enumerate(loader):
+            if epoch == start_epoch and step < start_step:
+                continue
+
+            if step == 0:
+                print("Got first batch. Sending to device...")
+
             x1 = x1.to(device)
             x2 = x2.to(device)
+
+            if step == 0:
+                print("First batch on device. Running encoder...")
 
             h1 = encoder(x1)
             h2 = encoder(x2)
@@ -179,32 +188,39 @@ def train_simclr():
             optimizer.step()
 
             total_loss += loss.item()
+            trained_steps += 1
 
-            if (idx + 1) % 20 == 0:
-                print(f"Epoch {epoch+1} [{idx+1}/{len(train_loader)}] - Loss: {loss.item():.4f}")
+            if (step + 1) % 20 == 0:
+                print(f"Epoch {epoch + 1} [{step + 1}/{len(loader)}] Loss: {loss.item():.4f}")
 
-        avg_loss = total_loss / len(train_loader)
-        print(f"Epoch {epoch+1}: Avg Loss = {avg_loss:.4f}")
+            if (step + 1) % SAVE_EVERY == 0:
+                torch.save({
+                    "epoch": epoch,
+                    "step": step + 1,
+                    "encoder": encoder.state_dict(),
+                    "projector": projector.state_dict(),
+                    "optimizer": optimizer.state_dict()
+                }, CHECKPOINT_PATH)
 
-        # -------------------------
-        # SAVE CHECKPOINT
-        # -------------------------
-        ckpt_path = f"{CHECKPOINT_DIR}/epoch_{epoch+1}.pth"
+                print(f"Saved checkpoint at epoch {epoch}, step {step + 1}")
+
+        avg_loss = total_loss / max(trained_steps, 1)
+        print(f"Epoch {epoch + 1} DONE | Avg Loss: {avg_loss:.4f}")
+
+        start_step = 0
+
         torch.save({
             "epoch": epoch + 1,
+            "step": 0,
             "encoder": encoder.state_dict(),
             "projector": projector.state_dict(),
             "optimizer": optimizer.state_dict()
-        }, ckpt_path)
+        }, CHECKPOINT_PATH)
 
-        print(f"Checkpoint saved: {ckpt_path}")
+        print(f"Saved end-of-epoch checkpoint for epoch {epoch + 1}")
 
-    # -------------------------
-    # SAVE FINAL ENCODER ONLY
-    # -------------------------
-    print("\nTraining complete.")
     torch.save(encoder, SAVE_PATH)
-    print(f"Final encoder saved to: {SAVE_PATH}")
+    print(f"Training complete. Encoder saved to {SAVE_PATH}")
 
 
 if __name__ == "__main__":

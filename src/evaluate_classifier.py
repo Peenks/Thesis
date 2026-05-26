@@ -3,45 +3,61 @@ import json
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from torchvision import datasets, transforms
+from torchvision import datasets, transforms, models
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
 
 
-# ===== CONFIG =====
+# =====================
+# CONFIG
+# =====================
 DATA_SPLIT_DIR = "data/split"
-CHECKPOINT_PATH = "models/simclr_encoder.pth"
 MODEL_PATH = "models/finetuned_model.pth"
 CLASS_MAP_PATH = "data/embeddings/class_to_idx.json"
 
 IMAGE_SIZE = 224
 BATCH_SIZE = 32
-NUM_WORKERS = 4
-NUM_CLASSES = 10
+NUM_WORKERS = 0
 
 
-# ===== DEVICE =====
+# =====================
+# DEVICE
+# =====================
 def get_device():
     if torch.backends.mps.is_available():
         return torch.device("mps")
     elif torch.cuda.is_available():
         return torch.device("cuda")
-    else:
-        return torch.device("cpu")
+    return torch.device("cpu")
 
 
-# ===== TRANSFORMS =====
+# =====================
+# TRANSFORM
+# =====================
 def get_test_transform():
     return transforms.Compose([
         transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
         transforms.ToTensor(),
-        transforms.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225]
-        ),
+        transforms.Normalize([0.485, 0.456, 0.406],
+                             [0.229, 0.224, 0.225])
     ])
 
 
-# ===== MODEL =====
+# =====================
+# ENCODER (MUST MATCH TRAINING)
+# =====================
+def build_encoder():
+    base = models.mobilenet_v2(weights=None)
+
+    return nn.Sequential(
+        base.features,
+        nn.AdaptiveAvgPool2d(1),
+        nn.Flatten()
+    )
+
+
+# =====================
+# MODEL (MUST MATCH TRAINING)
+# =====================
 class FineTunedTrashClassifier(nn.Module):
     def __init__(self, encoder, num_classes):
         super().__init__()
@@ -62,15 +78,32 @@ class FineTunedTrashClassifier(nn.Module):
         )
 
     def forward(self, x):
-        features = self.encoder(x)
-        logits = self.classifier(features)
-        return logits
+        x = self.encoder(x)
+        return self.classifier(x)
 
 
+# =====================
+# LOAD MODEL (CORRECT FIX)
+# =====================
+def load_model(device, num_classes):
+    print("Loading model...")
+
+    encoder = build_encoder()
+    model = FineTunedTrashClassifier(encoder, num_classes)
+
+    state_dict = torch.load(MODEL_PATH, map_location=device)
+
+    model.load_state_dict(state_dict, strict=True)
+
+    return model.to(device).eval()
+
+
+# =====================
+# MAIN
+# =====================
 def main():
     device = get_device()
     print(f"Using device: {device}")
-    print(f"Loading model from: {MODEL_PATH}")
 
     test_dataset = datasets.ImageFolder(
         os.path.join(DATA_SPLIT_DIR, "test"),
@@ -84,6 +117,7 @@ def main():
         num_workers=NUM_WORKERS
     )
 
+    # class mapping
     if os.path.exists(CLASS_MAP_PATH):
         with open(CLASS_MAP_PATH, "r") as f:
             class_to_idx = json.load(f)
@@ -93,24 +127,17 @@ def main():
     idx_to_class = {v: k for k, v in class_to_idx.items()}
     target_names = [idx_to_class[i] for i in range(len(idx_to_class))]
 
-    print("Loading encoder...")
-    encoder = torch.load(CHECKPOINT_PATH, map_location=device, weights_only=False)
-    encoder = encoder.to(device)
+    num_classes = len(target_names)
 
-    model = FineTunedTrashClassifier(encoder, NUM_CLASSES).to(device)
-    model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
-    model.eval()
+    model = load_model(device, num_classes)
 
-    all_preds = []
-    all_labels = []
+    all_preds, all_labels = [], []
 
     with torch.no_grad():
         for xb, yb in test_loader:
-            xb = xb.to(device)
-            yb = yb.to(device)
+            xb, yb = xb.to(device), yb.to(device)
 
-            logits = model(xb)
-            preds = logits.argmax(dim=1)
+            preds = model(xb).argmax(dim=1)
 
             all_preds.append(preds.cpu())
             all_labels.append(yb.cpu())

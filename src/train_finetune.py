@@ -17,7 +17,7 @@ CLASS_MAP_PATH = "data/embeddings/class_to_idx.json"
 
 IMAGE_SIZE = 224
 BATCH_SIZE = 32
-NUM_WORKERS = 4
+NUM_WORKERS = 0
 EPOCHS = 35
 NUM_CLASSES = 10
 PATIENCE = 5
@@ -36,12 +36,12 @@ def get_device():
         return torch.device("cpu")
 
 
-# ===== LESS AGGRESSIVE TRANSFORMS =====
+# ===== BALANCED TRANSFORMS =====
 def get_transforms():
     train_transform = transforms.Compose([
-        transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
+        transforms.RandomResizedCrop(IMAGE_SIZE, scale=(0.8, 1.0)),  # better than Resize
         transforms.RandomHorizontalFlip(p=0.5),
-        transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.02),
+        transforms.ColorJitter(0.2, 0.2, 0.2, 0.05),  # stronger than before, but safe
         transforms.ToTensor(),
         transforms.Normalize(
             mean=[0.485, 0.456, 0.406],
@@ -126,15 +126,16 @@ class FineTunedTrashClassifier(nn.Module):
         return logits
 
 
-# ===== FREEZE / UNFREEZE =====
+# ===== FREEZE / UNFREEZE (FIXED) =====
 def freeze_encoder(encoder):
     for param in encoder.parameters():
         param.requires_grad = False
 
 
-def unfreeze_last_layers(encoder, num_layers=150):
+def unfreeze_last_percent(encoder, percent=0.3):
     params = list(encoder.parameters())
-    for param in params[-num_layers:]:
+    num_unfreeze = int(len(params) * percent)
+    for param in params[-num_unfreeze:]:
         param.requires_grad = True
 
 
@@ -211,8 +212,9 @@ def train():
     encoder = torch.load(CHECKPOINT_PATH, map_location=device, weights_only=False)
     encoder = encoder.to(device)
 
+    # ✅ FIXED HERE
     freeze_encoder(encoder)
-    unfreeze_last_layers(encoder, num_layers=150)
+    unfreeze_last_percent(encoder, percent=0.3)
 
     model = FineTunedTrashClassifier(encoder, NUM_CLASSES).to(device)
 
