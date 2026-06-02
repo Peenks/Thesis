@@ -1,0 +1,5 @@
+Using device: mps
+Loading encoder...
+Trainable parameters: 2,535,050 / 3,015,178
+Class weights: tensor([2.0935, 1.9824, 1.0828, 0.3710, 0.6456, 1.9373, 1.1762, 0.9960, 0.9996,
+        2.0871], device='mps:0')
